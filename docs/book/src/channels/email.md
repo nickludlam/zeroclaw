@@ -24,10 +24,11 @@ mailbox without the ability to send email:
 
 - IMAP still runs: new mail is delivered to the agent and read/flag updates are
   written unless `observer_mode = true`.
-- Every outbound send is refused with an `outbound email is disabled` error, so
-  agent replies fail rather than leaving the mailbox. Surfaces that require real
-  delivery (SOP approval routes, no-reply notices, escalations, text polls)
-  treat the channel as unable to deliver and reject or skip it up front.
+- Every outbound send from this channel is refused with an `outbound email is
+  disabled` error, so agent replies fail rather than leaving the mailbox.
+  Surfaces that require real delivery (SOP approval routes, no-reply notices,
+  escalations, text polls) treat the channel as unable to deliver and reject or
+  skip it up front.
 - Set both `smtp_host` and `from_address` to enable sending again; either one
   alone keeps the channel inbound-only and raises an
   `email_smtp_partially_configured` config warning naming the missing field.
@@ -65,9 +66,9 @@ Real-time delivery via Google Cloud Pub/Sub, no polling.
 3. Authorize the agent's Gmail access and store the resulting token via the secret path above
 4. The agent watches for new-mail notifications and routes them to the bound agent
 
-Outbound sends still go via SMTP: configure `smtp_host` and `from_address` on an
-IMAP+SMTP `[channels.email.<alias>]` block. Without them, Gmail Push is
-inbound-only.
+Gmail Push sends through the Gmail API using its own `oauth_token`, independently
+of SMTP. Omitting `smtp_host` and `from_address` disables sending only for an
+IMAP+SMTP `[channels.email.<alias>]` block, not for Gmail Push.
 
 ---
 
