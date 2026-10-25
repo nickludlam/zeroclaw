@@ -22,8 +22,8 @@ The general-purpose email channel. Polls IMAP for new messages and, when SMTP is
 `from_address` unset (or blank) to give the agent read-write access to the
 mailbox without the ability to send email:
 
-- IMAP still runs: new mail is delivered to the agent and read/flag updates are
-  written unless `observer_mode = true`.
+- When the alias is bound to an agent, IMAP still runs: new mail is delivered to
+  the agent and read/flag updates are written unless `observer_mode = true`.
 - Every outbound send from this channel is refused with an `outbound email is
   disabled` error, so agent replies fail rather than leaving the mailbox.
   Surfaces that require real delivery (SOP approval routes, no-reply notices,
@@ -36,6 +36,38 @@ mailbox without the ability to send email:
 The restriction is outbound-only. Pair it with a peer group (above) to control
 who may address the agent, and with `observer_mode` if the mailbox must not be
 mutated at all.
+
+#### Tools-only: enable it, don't bind it
+
+To use an IMAP mailbox as a pull-only tool, set `enabled = true` on the alias and
+leave it out of every agent's `channels` list. Enabling the alias registers the
+`email_search` and `email_read` tools, while binding it to an agent is what starts
+the IMAP listener. The distinction matters for aliases with no SMTP configured
+(no `smtp_host` or `from_address`), which are inbound-only: they can receive mail,
+but `send` refuses to reply. If you bind such an alias, every inbound message from
+a sender your peer group admits dispatches an agent turn. The agent tries to
+reply, `send` refuses, and the reply fails, so you pay for a model turn on every
+email and get nothing back.
+
+```toml
+[channels.email.myserver]
+enabled = true          # registers the read-only tools
+imap_host = "imap.example.com"
+username = "user"
+password = "..."        # leave smtp_host / from_address unset
+
+[agents.example]
+channels = ["telegram.home"]   # any bound channel; email alias deliberately absent
+```
+
+Watch out for the fallback. The alias is only left unbound when at least one agent,
+anywhere in the config, declares a non-empty `channels` list. If no agent declares
+any bindings, ZeroClaw falls back to the legacy behavior: it starts every enabled
+channel under the default agent (the agent named `default`, otherwise the first
+alphabetically). In an email-only config, that means the IMAP listener starts anyway
+and you pay the per-email turn cost described above. To keep the alias tools-only,
+make sure some agent binds at least one other channel, as in the example where
+`agents.example` binds `telegram.home`.
 
 ### Gmail gotchas
 
