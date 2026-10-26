@@ -847,14 +847,6 @@ impl EmailChannel {
         Ok(new_threshold)
     }
 
-    /// SMTP is optional: IMAP is always active and may write flags, while
-    /// outbound sending needs both a relay host and a From identity. Without
-    /// them the channel is read-write on the mailbox but cannot send.
-    fn outbound_enabled(&self) -> bool {
-        non_blank_value(self.config.smtp_host.as_deref()).is_some()
-            && non_blank_value(self.config.from_address.as_deref()).is_some()
-    }
-
     fn smtp_credentials(&self) -> Credentials {
         let user = non_blank_value(self.config.smtp_username.as_deref())
             .unwrap_or(&self.config.username)
@@ -1042,11 +1034,11 @@ impl Channel for EmailChannel {
     /// no-reply notices, escalations, text polls — refuse it up front instead
     /// of failing at send time.
     fn supports_outbound_send(&self) -> bool {
-        self.outbound_enabled()
+        self.config.outbound_smtp_configured()
     }
 
     async fn send(&self, message: &SendMessage) -> Result<()> {
-        if !self.outbound_enabled() {
+        if !self.config.outbound_smtp_configured() {
             anyhow::bail!(
                 "channels.email.{}: outbound email is disabled because smtp_host and \
                  from_address are not both configured; set both to enable sending",
@@ -1069,7 +1061,7 @@ impl Channel for EmailChannel {
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        if !self.outbound_enabled() {
+        if !self.config.outbound_smtp_configured() {
             ::zeroclaw_log::record!(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
@@ -2447,19 +2439,18 @@ mod tests {
     #[test]
     fn outbound_disabled_without_smtp_host() {
         let channel = outbound_test_channel(None, Some("bot@example.com"));
-        assert!(!channel.outbound_enabled());
+        assert!(!Channel::supports_outbound_send(&channel));
     }
 
     #[test]
     fn outbound_disabled_without_from_address() {
         let channel = outbound_test_channel(Some("smtp.example.com"), None);
-        assert!(!channel.outbound_enabled());
+        assert!(!Channel::supports_outbound_send(&channel));
     }
 
     #[test]
-    fn outbound_enabled_with_relay_and_from_address() {
+    fn outbound_supported_with_relay_and_from_address() {
         let channel = outbound_test_channel(Some("smtp.example.com"), Some("bot@example.com"));
-        assert!(channel.outbound_enabled());
         assert!(Channel::supports_outbound_send(&channel));
     }
 
@@ -2475,7 +2466,7 @@ mod tests {
         // from the previous required-string defaults; those must stay
         // inbound-only rather than pointing SMTP at an empty host.
         let channel = outbound_test_channel(Some("   "), Some(""));
-        assert!(!channel.outbound_enabled());
+        assert!(!Channel::supports_outbound_send(&channel));
     }
 
     #[tokio::test]

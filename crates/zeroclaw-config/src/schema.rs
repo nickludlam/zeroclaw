@@ -8,6 +8,7 @@ use crate::autonomy::AutonomyLevel;
 use crate::autonomy::DelegationPolicy;
 use crate::domain_matcher::DomainMatcher;
 use crate::pairing::{PAIRING_CODE_MAX_LENGTH, PAIRING_CODE_MIN_LENGTH, PairingCodePolicy};
+use crate::scattered_types::OutboundSmtp;
 use crate::traits::{ApplicationCapability, ChannelConfig, HasPropKind, PropKind};
 use crate::validation_bail;
 use anyhow::{Context, Result};
@@ -13131,6 +13132,10 @@ pub fn validate_memory_semantics(
 /// refuses every send. Surface the cause once per alias instead of leaving the
 /// operator to discover it from a reply that never leaves.
 ///
+/// The classification is shared with the runtime gate rather than restated
+/// here, so `config validate` and `EmailChannel` cannot drift into disagreeing
+/// about which aliases can send.
+///
 /// Called from `Config::collect_warnings`, so this reaches the CLI and the
 /// gateway dashboard on the same path as the other warnings.
 pub fn validate_email_smtp_semantics(
@@ -13140,16 +13145,11 @@ pub fn validate_email_smtp_semantics(
     if !em.enabled {
         return Vec::new();
     }
-    let non_blank = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
-    let has_host = non_blank(em.smtp_host.as_deref());
-    let has_from = non_blank(em.from_address.as_deref());
-    if has_host == has_from {
+    // Only a half-configured pair is diagnosable; the classifier names the
+    // missing half. A fully configured pair and the supported inbound-only
+    // mode both stay quiet.
+    let OutboundSmtp::Partial { set, missing } = em.outbound_smtp() else {
         return Vec::new();
-    }
-    let (set, missing) = if has_host {
-        ("smtp_host", "from_address")
-    } else {
-        ("from_address", "smtp_host")
     };
     vec![crate::validation_warnings::ValidationWarning::new(
         crate::validation_warnings::EMAIL_SMTP_PARTIALLY_CONFIGURED,

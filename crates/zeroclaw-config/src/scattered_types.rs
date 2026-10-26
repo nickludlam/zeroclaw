@@ -669,6 +669,66 @@ impl Default for EmailConfig {
     }
 }
 
+/// Configuration state of the outbound SMTP pair on an [`EmailConfig`].
+///
+/// `smtp_host` and `from_address` are both optional so an IMAP-only mailbox
+/// can be read without granting send access, and sending needs BOTH. This is
+/// the single definition of that rule: the channel gate (`send`, `listen`'s
+/// inbound-only notice, `supports_outbound_send`) and the
+/// `email_smtp_partially_configured` warning both classify through it, so
+/// `config validate` and the runtime cannot drift into disagreeing about
+/// whether an alias can send. Blank values count as unset so a legacy
+/// `field = ""` stays inbound-only instead of pointing SMTP at an empty host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutboundSmtp {
+    /// Both halves are set: the channel can send.
+    Configured,
+    /// Neither half is set: the supported inbound-only mode.
+    InboundOnly,
+    /// Exactly one half is set, so the operator configured sending that the
+    /// channel cannot perform. Values are the TOML keys under the alias.
+    Partial {
+        /// The half that is set.
+        set: &'static str,
+        /// The half that is missing.
+        missing: &'static str,
+    },
+}
+
+impl EmailConfig {
+    /// Whether this alias can send mail.
+    ///
+    /// The canonical answer to "is outbound configured": `EmailChannel` gates
+    /// `send`, its startup notice and `supports_outbound_send` on this, and
+    /// `validate_email_smtp_semantics` reads the same classification, so the
+    /// warning cannot claim sending is disabled for an alias that can send.
+    #[must_use]
+    pub fn outbound_smtp_configured(&self) -> bool {
+        matches!(self.outbound_smtp(), OutboundSmtp::Configured)
+    }
+
+    /// Classify the outbound SMTP pair. See [`OutboundSmtp`].
+    #[must_use]
+    pub(crate) fn outbound_smtp(&self) -> OutboundSmtp {
+        let set = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
+        match (
+            set(self.smtp_host.as_deref()),
+            set(self.from_address.as_deref()),
+        ) {
+            (true, true) => OutboundSmtp::Configured,
+            (false, false) => OutboundSmtp::InboundOnly,
+            (true, false) => OutboundSmtp::Partial {
+                set: "smtp_host",
+                missing: "from_address",
+            },
+            (false, true) => OutboundSmtp::Partial {
+                set: "from_address",
+                missing: "smtp_host",
+            },
+        }
+    }
+}
+
 fn default_label_filter() -> Vec<String> {
     vec!["INBOX".into()]
 }
@@ -912,6 +972,44 @@ mod tests {
             .has_required_credentials()
         );
         assert!(!VoiceCallConfig::default().has_required_credentials());
+    }
+
+    #[test]
+    fn email_outbound_smtp_classification_is_single_source() {
+        let cfg = |host: Option<&str>, from: Option<&str>| EmailConfig {
+            smtp_host: host.map(str::to_string),
+            from_address: from.map(str::to_string),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            cfg(Some("smtp.example.com"), Some("bot@example.com")).outbound_smtp(),
+            OutboundSmtp::Configured
+        );
+        assert_eq!(cfg(None, None).outbound_smtp(), OutboundSmtp::InboundOnly);
+        assert_eq!(
+            cfg(Some("smtp.example.com"), None).outbound_smtp(),
+            OutboundSmtp::Partial {
+                set: "smtp_host",
+                missing: "from_address"
+            }
+        );
+        assert_eq!(
+            cfg(None, Some("bot@example.com")).outbound_smtp(),
+            OutboundSmtp::Partial {
+                set: "from_address",
+                missing: "smtp_host"
+            }
+        );
+
+        // Blank counts as unset, matching the legacy `field = ""` handling that
+        // keeps such configs inbound-only rather than relaying to an empty host.
+        assert_eq!(
+            cfg(Some("   "), Some("")).outbound_smtp(),
+            OutboundSmtp::InboundOnly
+        );
+        assert!(!cfg(Some("   "), Some("bot@example.com")).outbound_smtp_configured());
+        assert!(cfg(Some("smtp.example.com"), Some("bot@example.com")).outbound_smtp_configured());
     }
 
     #[test]
